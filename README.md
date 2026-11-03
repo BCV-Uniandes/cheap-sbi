@@ -1,75 +1,128 @@
-# Predicting When Cheap Simulators Break Neural Inference of Bursty Gene Expression
+<div align="center">
 
-Code for the paper presented at the **LatinX in AI Workshop at NeurIPS 2026** (non-archival).
+# Predicting When Cheap Simulators Break<br>Neural Inference of Bursty Gene Expression
 
-Rafael Velásquez and Pablo Arbeláez, Universidad de los Andes, Colombia.
+**Rafael Velásquez** · **Pablo Arbeláez**<br>
+Universidad de los Andes, Colombia
 
-Amortized simulation-based inference (SBI) is often trained on a cheap approximate
-simulator rather than on the exact model that generated the data. Using the two-state
-(telegraph) model of gene expression, whose exact stationary distribution is known in
-closed form, we train neural posterior estimators (NPE) on the exact chemical master
-equation (CME) and on three cheap surrogates (chemical Langevin equation, linear noise
-approximation and a moment-matched negative binomial), evaluate them all on exact data,
-and show that the empirical Fano factor of a snapshot flags where a Gaussian surrogate
-breaks posterior calibration.
+[![Workshop](https://img.shields.io/badge/NeurIPS%202026-LatinX%20in%20AI%20Workshop-8e1b24)](https://www.latinxinai.org/)
+[![Paper](https://img.shields.io/badge/paper-PDF-2b5797)](paper/cheap_simulators_lxai2026.pdf)
+[![Python](https://img.shields.io/badge/python-3.10-7aa6d8)](https://www.python.org/)
+[![sbi](https://img.shields.io/badge/sbi-0.26.1-d26a70)](https://github.com/sbi-dev/sbi)
+[![License: MIT](https://img.shields.io/badge/license-MIT-lightgrey)](LICENSE)
 
-## Repository contents
+</div>
 
-| File | What it does |
-|---|---|
-| `telegraph.py` | Telegraph model: exact Poisson-Beta sampler (CME), CLE, LNA and NB surrogates, closed-form moments, summary statistics |
-| `sbi_experiment.py` | Prior, batched simulation of snapshots, summary-statistic features |
-| `run_experiment.py` | Trains the four estimators, evaluates them on one shared exact test set, prints Table 1 and the per-bin coverage, saves `results_main.npz` |
-| `run_budget.py` | Fano-guided versus random routing of queries (Section 5.5), saves `budget_curves.npz` |
-| `run_ablation.py` | Moments-only feature ablation (Section 5.2) |
-| `run_seeds.py` | Robustness across five random seeds (Section 5.2) |
-| `run_ncells.py` | Robustness to the snapshot size (Section 5.6) |
-| `paper_figures.py` | Draws every figure in the paper style from the saved results, and computes Figure 1 |
-| `reproduce.sh` | Runs everything in order |
+<p align="center">
+  <img src="assets/money_plot.png" width="92%" alt="Posterior error and 90% coverage of k_on against the empirical Fano factor for estimators trained on four simulators">
+</p>
+
+<p align="center"><sub><b>Main result.</b> Neural posterior estimators trained on four simulators and evaluated on
+exact data. The Gaussian surrogates (reds) lose calibration where expression turns bursty, while a
+count-valued surrogate carrying the same moments (light blue) tracks the exact control (dark blue).</sub></p>
+
+---
+
+## TL;DR
+
+Amortized simulation-based inference (SBI) is often trained on a **cheap approximate simulator**
+instead of the exact model that generated the data. In single-cell gene expression, the usual
+shortcut replaces the exact chemical master equation (CME) with Gaussian approximations such as the
+chemical Langevin equation (CLE) or the linear noise approximation (LNA). We use the two-state
+(telegraph) model, whose exact answer is known in closed form, to show **when** this shortcut breaks
+neural inference, **why** it breaks, and how a number read directly off each snapshot, its
+**Fano factor**, flags the queries at risk before running inference.
+
+## Key findings
+
+| | Finding | Evidence |
+|---|---|---|
+| 🔍 | **The CLE is wrong in one direction.** In the bursty regime it overestimates the mean, suppresses the Fano factor and erases zero-inflation. | Zero fraction 0.90 (exact) against 0.04 (CLE) |
+| 📉 | **Both Gaussian surrogates miscalibrate NPE.** The CLE fails everywhere; the LNA holds until the empirical Fano reaches about 4.5 and then collapses. | 90% coverage of k_on: CLE 0.21, LNA 0.55, control 0.89 |
+| 🧪 | **The distributional family, not cheapness, drives the failure.** A negative binomial with the *same* moments as the LNA is calibrated, and matching moments alone does not rescue the Gaussians. | NB 0.91 against LNA 0.55 |
+| 🧭 | **The Fano factor routes queries.** Sending the highest-Fano queries to the exact estimator beats random routing at every budget. | At half the budget: 0.78 against 0.72 |
+| 📈 | **More data makes it worse.** The CLE's calibration falls as snapshots grow, the signature of misspecification rather than noise. | CLE coverage 0.40 at 100 cells, 0.13 at 2000 |
+
+<table>
+  <tr>
+    <td width="62%"><img src="assets/premise_validation.png" alt="Mean, Fano factor and zero fraction of the exact CME and the CLE along a burst-frequency sweep"></td>
+    <td width="38%"><img src="assets/budget_rule.png" alt="Coverage against the fraction of queries routed to the exact estimator, Fano-guided versus random"></td>
+  </tr>
+  <tr>
+    <td><sub><b>The CLE misspecifies the model only where expression is bursty</b> (shaded): it inflates the mean, flattens the Fano factor and loses the zeros.</sub></td>
+    <td><sub><b>Fano-guided routing</b> recovers calibration with fewer queries sent to the exact model than random routing.</sub></td>
+  </tr>
+</table>
+
+## The setup in one table
+
+| Training simulator | Role | What it keeps | What it misses |
+|---|---|---|---|
+| **CME** (Poisson-Beta) | exact control | everything | |
+| **NB** (negative binomial) | non-Gaussian control | exact mean and Fano, counts, zeros | exact shape |
+| **LNA** (Gaussian, clipped at zero) | cheap surrogate | exact mean and variance (before clipping) | zero-inflation, skew |
+| **CLE** (Euler-Maruyama) | cheap surrogate | dynamics in the continuum limit | discreteness of the gene and the counts |
+
+Each estimator is a masked autoregressive flow trained with [`sbi`](https://github.com/sbi-dev/sbi)
+on 8,000 simulations of 500-cell snapshots, reduced to six summary statistics, and every estimator is
+evaluated on the same held-out set of exact snapshots.
+
+## Repository structure
+
+```
+cheap-simulators-bursty-sbi/
+├── telegraph.py         # telegraph model: exact CME sampler, CLE, LNA, NB, closed-form moments, summaries
+├── sbi_experiment.py    # prior and batched simulation of snapshots
+├── run_experiment.py    # Table 1, Figures 2-3, Appendix A (saves results_main.npz)
+├── run_budget.py        # Figure 4, Fano-guided vs random routing (saves budget_curves.npz)
+├── run_ablation.py      # moments-only feature ablation
+├── run_seeds.py         # robustness across five seeds
+├── run_ncells.py        # robustness to the snapshot size
+├── paper_figures.py     # every figure in the paper style; computes Figure 1
+├── reproduce.sh         # runs everything in order
+├── assets/              # figures shown in this README
+└── paper/               # camera-ready PDF
+```
 
 ## Installation
 
 ```bash
-conda create -n cheap-sbi python=3.10
+git clone https://github.com/Rafther0112/cheap-simulators-bursty-sbi.git
+cd cheap-simulators-bursty-sbi
+conda create -n cheap-sbi python=3.10 -y
 conda activate cheap-sbi
 pip install -r requirements.txt
 ```
 
-Tested with Python 3.10 and `sbi` 0.26.1. A GPU is not required.
+A GPU is not required.
 
 ## Reproducing the paper
+
+Everything at once:
 
 ```bash
 ./reproduce.sh
 ```
 
-or step by step:
+Or item by item:
 
 | Paper item | Command |
 |---|---|
 | Table 1, Figures 2 and 3, Appendix A | `python run_experiment.py --n_sims 8000 --n_cells 500 --n_test 400 --seed 0` |
 | Figure 4 | `python run_budget.py --n_sims 8000 --n_cells 500 --n_test 600` |
-| Figure 1 (and a redraw of all figures) | `python paper_figures.py` |
+| Figure 1 (and a redraw of every figure) | `python paper_figures.py` |
 | Moments-only ablation | `python run_ablation.py --n_sims 8000 --n_cells 500 --n_test 400` |
 | Seed robustness | `python run_seeds.py --n_sims 8000 --n_cells 500 --n_test 400 --seeds 0 1 2 3 4` |
 | Snapshot-size robustness | `python run_ncells.py --n_sims 8000 --n_cells 100 200 500 2000 --sims cme cle` |
 
-Training sets are cached in `cache/` after the first run. Generating the CLE training
-set is the slowest step (about 6 to 8 minutes for 8,000 simulations on one machine);
-each estimator then trains in a few minutes. Figures are written as vector PDFs and
-300 dpi PNGs.
+Training sets are cached in `cache/` after the first run. The CLE training set is the slowest
+step (about 6 to 8 minutes for 8,000 simulations); each estimator then trains in a few minutes.
+`paper_figures.py` redraws every figure from the saved `.npz` files without retraining, as vector
+PDFs and 300 dpi PNGs.
 
-Training uses fixed seeds, but the training of normalizing flows is not bit-for-bit
-deterministic across hardware and library versions, so re-runs can differ from the
-reported numbers in the second decimal.
-
-## Notes
-
-* Every estimator is evaluated on the same held-out set of exact CME snapshots, and every
-  trained flow, the control included, is sampled directly rather than by rejection
-  within the prior box (misspecified flows place mass outside it).
-* Burstiness is binned by the **empirical** Fano factor of each snapshot, a quantity
-  available at inference time, in equal-count sextiles of the shared test set.
+> **Note.** Training uses fixed seeds, but normalizing-flow training is not bit-for-bit
+> deterministic across hardware and library versions, so re-runs can differ from the reported
+> numbers in the second decimal.
 
 ## Citation
 
@@ -85,4 +138,5 @@ reported numbers in the second decimal.
 
 ## License
 
-MIT, see `LICENSE`.
+The code is released under the [MIT License](LICENSE). The manuscript in `paper/` is shared for
+academic use.
