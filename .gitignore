@@ -6,3 +6,7 @@ cache/
 __pycache__/
 *.pyc
 .ipynb_checkpoints/
+
+# figures shown in the README and the camera-ready paper
+!assets/*.png
+!paper/*.pdf
